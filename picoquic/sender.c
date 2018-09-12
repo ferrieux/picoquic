@@ -217,6 +217,12 @@ uint32_t picoquic_predict_packet_header_length_11(
     return length;
 }
 
+static int loss_compute_gbit(int count,int gindex) {
+  if (count<=0) return 0;     /* no loss or extra packets=> G=0.0 */
+  else if (count>7) return 1; /* more than 7 losses => G=1.0 */
+  else return (((gindex+1)%(count+1))>0); /* N= 1 to 7 losses => G = N/(N+1) */
+}
+
 uint32_t picoquic_create_packet_header(
     picoquic_cnx_t* cnx,
     picoquic_packet_type_enum packet_type,
@@ -237,21 +243,20 @@ uint32_t picoquic_create_packet_header(
         /* Create a short packet -- using 32 bit sequence numbers for now */
         uint8_t K = (packet_type == picoquic_packet_1rtt_protected_phi0) ? 0 : 0x40;
         const uint8_t C = 0x30;
-        uint8_t spin_vec = (uint8_t)(cnx->spin_vec);
         uint8_t spin_bit = (uint8_t)((cnx->current_spin) << 2);
+        uint8_t loss_bits ;
 
-        if (!cnx->spin_edge) spin_vec = 0;
-        else {
-            cnx->spin_edge = 0;
-            uint64_t dt = picoquic_get_quic_time(cnx->quic) - cnx->spin_last_trigger;
-            if (dt > PICOQUIC_SPIN_VEC_LATE) { // DELAYED
-                spin_vec = 1;
-                // fprintf(stderr, "Delayed Outgoing Spin=%d DT=%ld\n", cnx->current_spin, dt);
-            }
-        }
+        if (cnx->spin_edge) {
+	  cnx->loss_g_index=0;
+	  cnx->spin_edge = 0;
+	}
+        loss_bits = (cnx->loss_q<<1)|loss_compute_gbit(cnx->loss_count,cnx->loss_g_index);
+	cnx->loss_g_index++;
+	cnx->loss_q_index++;
+	if (cnx->loss_q_index>=PICOQUIC_LOSS_Q_PERIOD) cnx->loss_q=(1-cnx->loss_q);
 
         length = 0;
-        bytes[length++] = (K | C | spin_bit | spin_vec);
+        bytes[length++] = (K | C | spin_bit | loss_bits);
         length += picoquic_format_connection_id(&bytes[length], PICOQUIC_MAX_PACKET_SIZE - length, dest_cnx_id);
 
         *pn_offset = length;

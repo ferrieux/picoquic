@@ -58,8 +58,8 @@ extern "C" {
 #define PICOQUIC_CWIN_INITIAL (10 * PICOQUIC_MAX_PACKET_SIZE)
 #define PICOQUIC_CWIN_MINIMUM (2 * PICOQUIC_MAX_PACKET_SIZE)
 
-#define PICOQUIC_SPIN_VEC_LATE 1000 /* in microseconds : reaction time beyond which to mark a spin bit edge as 'late' */
-
+#define PICOQUIC_LOSS_Q_PERIOD	64
+  
 /*
  * Types of frames
  */
@@ -444,11 +444,16 @@ typedef struct st_picoquic_cnx_t {
     unsigned int current_spin : 1; /* Current value of the spin bit */             
     unsigned int client_mode : 1; /* Is this connection the client side? */
     unsigned int prev_spin : 1;  /* previous Spin bit */
-    unsigned int spin_vec : 2;   /* Valid Edge Counter, makes spin bit RTT measurements more reliable */
     unsigned int spin_edge : 1;  /* internal signalling from incoming to outgoing: we just spinned it */
-    uint64_t spin_last_trigger;  /* timestamp of the incoming packet that triggered the spinning */
-
-
+  
+  unsigned int spun : 1;     /* have we already seen a spinbit flip ?  */
+  unsigned int loss_q : 1;   /* current Q bit (square sequence)  */
+  unsigned int loss_count;   /* losses in the last spin flight */
+  unsigned int loss_g_index; /* index into the grayscale pattern */
+  unsigned int loss_q_index; /* index into the square sequence   */
+  unsigned int loss_ref;     /* packet number of beginning of flight */
+  unsigned int rcv_count;    /* packet counter to compute losses */
+  
     /* Local and remote parameters */
     picoquic_tp_t local_parameters;
     picoquic_tp_t remote_parameters;
@@ -625,7 +630,6 @@ typedef struct _picoquic_packet_header {
     int epoch;
     picoquic_packet_context_enum pc;
     unsigned int spin : 1;
-    unsigned int spin_vec : 2;
     unsigned int has_spin_bit : 1;
     uint32_t token_length;
     uint32_t token_offset;

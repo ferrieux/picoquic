@@ -276,7 +276,6 @@ int picoquic_parse_packet_header(
                  }
                  ph->has_spin_bit = 1;
                  ph->spin = (bytes[0] >> 2) & 1;
-                 ph->spin_vec = bytes[0] & 0x03 ;
 
                  ph->pn_offset = ph->offset;
                  ph->pn = 0;
@@ -1092,10 +1091,17 @@ int picoquic_incoming_encrypted(
                 // got an edge 
                 cnx->prev_spin = cnx->current_spin;
                 cnx->spin_edge = 1;
-                cnx->spin_vec = (ph->spin_vec == 3) ? 3 : (ph->spin_vec + 1);
-                cnx->spin_last_trigger = picoquic_get_quic_time(cnx->quic);
+		if (cnx->spun) {
+		  cnx->loss_count = ((int64_t)ph->pn64 - (int64_t)cnx->loss_ref) - cnx->rcv_count;
+		} else {
+		  cnx->loss_count=0;
+		}
+		cnx->loss_ref = ph->pn64;
+		cnx->rcv_count = 0;
+		cnx->spun=1;
             }
         }
+	cnx->rcv_count++;
 
         /* Do not process data in closing or draining modes */
         if (cnx->cnx_state >= picoquic_state_closing_received) {
