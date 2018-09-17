@@ -1121,9 +1121,7 @@ int picoquic_incoming_encrypted(
                 cnx->prev_spin = cnx->current_spin;
                 cnx->spin_edge = 1;
 		fprintf(cnx->quic->F_log,"SPINNING: S=%d  lossdelta=%d\n",cnx->current_spin,cnx->loss_cnt[0]);
-		if (cnx->loss_cnt[0]>0) {
-		  shift_loss_cnt(cnx);
-		}
+		shift_loss_cnt(cnx);
             }
         }
 	cnx->rcv_count++;
