@@ -217,9 +217,45 @@ uint32_t picoquic_predict_packet_header_length_11(
     return length;
 }
 
-static int loss_compute_gbit(int count,int gindex) {
-  if (count<=0) return 0;     /* no loss or extra packets=> G=0.0 */
-  else return (((gindex+1)%(count+1))>0); /*  G = N/(N+1) : pattern = "N x 1 + 0" */
+static int reap_and_report_loss(picoquic_cnx_t* cnx) {
+  int delta,h;
+  
+  if (cnx->loss_ref) {
+    delta = (cnx->cur_pn - cnx->loss_ref) - cnx->rcv_count;
+  } else {
+    /* first run */
+    delta=0;
+  }
+  
+  cnx->rcv_count = 0;
+  cnx->loss_ref = cnx->cur_pn;
+  h=0;
+  if (delta!=0) {
+    int c0,a0,s0,c1,a1,s1;
+    
+    h=cnx->loss_horizon;
+    if (h>1) h=1;
+    cnx->loss_cnt[0]+=delta;
+    /* compensation: if different signs, smallest abs value gets cancelled */
+    if ((h==1)&&(c0=cnx->loss_cnt[0])&&(c1=cnx->loss_cnt[1])) {
+      if (c0>=0) {a0=c0;s0=1;} else {a0=-c0;s0=0;}
+      if (c1>=0) {a1=c1;s1=1;} else {a1=-c1;s1=0;}
+      if (s0!=s1) {
+	if (a0>a1) {c0+=c1;c1=0;}
+	else {c1+=c0;c0=0;}
+	cnx->loss_cnt[0]=c0;
+	cnx->loss_cnt[1]=c1;
+      }
+    }
+  }
+  picoquic_trim_horizon(cnx);
+  if (cnx->loss_cnt[cnx->loss_horizon]>0) {
+    cnx->loss_cnt[cnx->loss_horizon]--;
+    picoquic_trim_horizon(cnx);
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 uint32_t picoquic_create_packet_header(
@@ -245,11 +281,7 @@ uint32_t picoquic_create_packet_header(
         uint8_t spin_bit = (uint8_t)((cnx->current_spin) << 2);
         uint8_t loss_bits ;
 
-        if (cnx->spin_edge) {
-	  cnx->loss_g_index=0;
-	  cnx->spin_edge = 0;
-	}
-        loss_bits = (cnx->loss_q<<1)|loss_compute_gbit(cnx->loss_count,cnx->loss_g_index);
+        loss_bits = (cnx->loss_q<<1)|reap_and_report_loss(cnx);
 
         length = 0;
         bytes[length++] = (K | C | spin_bit | loss_bits);
@@ -2375,8 +2407,7 @@ int picoquic_prepare_packet(picoquic_cnx_t* cnx,
 
     if ((ret==0)&&(*send_length != 0)) { /* actual packet on its way out */
       if (!(send_buffer[0]&0x80)) { /* short header */
-	fprintf(cnx->quic->F_log,"DEBUG: len=%d byte=0x%2x qindex=%d gindex=%d S=%d Q=%d G=%d (loss=%d)\n",(int)*send_length,send_buffer[9],(int)cnx->loss_q_index,(int)cnx->loss_g_index,(send_buffer[0]&4)>>2,(send_buffer[0]&2)>>1,(send_buffer[0]&1),cnx->loss_count);
-	cnx->loss_g_index++;
+	fprintf(cnx->quic->F_log,"DEBUG: len=%d byte=0x%2x qindex=%d S=%d Q=%d E=%d\n",(int)*send_length,send_buffer[9],cnx->loss_q_index,(send_buffer[0]&4)>>2,(send_buffer[0]&2)>>1,(send_buffer[0]&1));
 	cnx->loss_q_index++;
 	if (cnx->loss_q_index>=PICOQUIC_LOSS_Q_PERIOD) {
 	  cnx->loss_q_index=0;

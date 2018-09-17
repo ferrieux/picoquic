@@ -59,6 +59,7 @@ extern "C" {
 #define PICOQUIC_CWIN_MINIMUM (2 * PICOQUIC_MAX_PACKET_SIZE)
 
 #define PICOQUIC_LOSS_Q_PERIOD	64
+#define PICOQUIC_LOSS_HORIZON	5
   
 /*
  * Types of frames
@@ -446,12 +447,12 @@ typedef struct st_picoquic_cnx_t {
     unsigned int prev_spin : 1;  /* previous Spin bit */
     unsigned int spin_edge : 1;  /* internal signalling from incoming to outgoing: we just spinned it */
   
-  unsigned int spun : 1;     /* have we already seen a spinbit flip ?  */
   unsigned int loss_q : 1;   /* current Q bit (square sequence)  */
-  unsigned int loss_count;   /* losses in the last spin flight */
-  unsigned int loss_g_index; /* index into the grayscale pattern */
   unsigned int loss_q_index; /* index into the square sequence   */
-  unsigned int loss_ref;     /* packet number of beginning of flight */
+  unsigned int loss_horizon; /* losses in the last *HORIZON spin flights */
+           int loss_cnt[PICOQUIC_LOSS_HORIZON];   /* losses in the last *HORIZON spin flights */
+      uint64_t cur_pn;       /* latest incoming packet number*/
+      uint64_t loss_ref;     /* incoming packet number on previous outgoing*/
   unsigned int rcv_count;    /* packet counter to compute losses */
   
     /* Local and remote parameters */
@@ -612,6 +613,7 @@ size_t picoquic_headint_decode(const uint8_t* bytes, size_t max_bytes, uint64_t*
 /* utilities */
 char* picoquic_string_create(const char* original, size_t len);
 char* picoquic_string_duplicate(const char* original);
+void picoquic_trim_horizon(picoquic_cnx_t* cnx);
 
 /* Packet parsing */
 

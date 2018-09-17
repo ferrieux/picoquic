@@ -1061,6 +1061,35 @@ int picoquic_incoming_0rtt(
     return ret;
 }
 
+void picoquic_trim_horizon(picoquic_cnx_t* cnx)
+{
+  int h;
+  
+  for(h=cnx->loss_horizon;h>0;h--) {
+    if (cnx->loss_cnt[h]>0) break;
+  }
+  cnx->loss_horizon=h;
+}
+
+static void shift_loss_cnt(picoquic_cnx_t* cnx)
+{
+  int h;
+  
+  cnx->loss_horizon++;
+  if (cnx->loss_horizon>=PICOQUIC_LOSS_HORIZON) {
+    cnx->loss_horizon--;
+    fprintf(cnx->quic->F_log,"LOSS_HORIZON=%d reached. Forgetting %d losses.\n",PICOQUIC_LOSS_HORIZON,cnx->loss_cnt[cnx->loss_horizon]);
+  }
+  for(h=cnx->loss_horizon;h>0;h--) {
+    cnx->loss_cnt[h]=cnx->loss_cnt[h-1];
+  }
+  if ((cnx->loss_horizon>=2)&&(cnx->loss_cnt[2]<0)) {
+    cnx->loss_cnt[2]=0; /* no reord-cancel beyond 1 RTT */
+  }
+  cnx->loss_cnt[0]=0;
+  picoquic_trim_horizon(cnx);
+}
+
 /*
  * Processing of client encrypted packet.
  */
@@ -1091,19 +1120,14 @@ int picoquic_incoming_encrypted(
                 // got an edge 
                 cnx->prev_spin = cnx->current_spin;
                 cnx->spin_edge = 1;
-		if (cnx->spun) {
-		  cnx->loss_count = ((int64_t)ph->pn64 - (int64_t)cnx->loss_ref) - cnx->rcv_count;
-		  fprintf(cnx->quic->F_log,"SPINNING: S=%d   newpn=%ld  oldpn=%ld rcv=%d\n",cnx->current_spin,
-			  (int64_t)ph->pn64,(int64_t)cnx->loss_ref,cnx->rcv_count);
-		} else {
-		  cnx->loss_count=0;
+		fprintf(cnx->quic->F_log,"SPINNING: S=%d  lossdelta=%d\n",cnx->current_spin,cnx->loss_cnt[0]);
+		if (cnx->loss_cnt[0]>0) {
+		  shift_loss_cnt(cnx);
 		}
-		cnx->loss_ref = ph->pn64;
-		cnx->rcv_count = 0;
-		cnx->spun=1;
             }
         }
 	cnx->rcv_count++;
+	cnx->cur_pn=ph->pn64;
 
         /* Do not process data in closing or draining modes */
         if (cnx->cnx_state >= picoquic_state_closing_received) {
