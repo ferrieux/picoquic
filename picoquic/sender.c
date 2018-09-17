@@ -219,8 +219,7 @@ uint32_t picoquic_predict_packet_header_length_11(
 
 static int loss_compute_gbit(int count,int gindex) {
   if (count<=0) return 0;     /* no loss or extra packets=> G=0.0 */
-  else if (count>7) return 1; /* more than 7 losses => G=1.0 */
-  else return (((gindex+1)%(count+1))>0); /* N= 1 to 7 losses => G = N/(N+1) */
+  else return (((gindex+1)%(count+1))>0); /*  G = N/(N+1) : pattern = "N x 1 + 0" */
 }
 
 uint32_t picoquic_create_packet_header(
@@ -251,9 +250,6 @@ uint32_t picoquic_create_packet_header(
 	  cnx->spin_edge = 0;
 	}
         loss_bits = (cnx->loss_q<<1)|loss_compute_gbit(cnx->loss_count,cnx->loss_g_index);
-	cnx->loss_g_index++;
-	cnx->loss_q_index++;
-	if (cnx->loss_q_index>=PICOQUIC_LOSS_Q_PERIOD) cnx->loss_q=(1-cnx->loss_q);
 
         length = 0;
         bytes[length++] = (K | C | spin_bit | loss_bits);
@@ -2375,6 +2371,18 @@ int picoquic_prepare_packet(picoquic_cnx_t* cnx,
                 break;
             }
         }
+    }
+
+    if ((ret==0)&&(*send_length != 0)) { /* actual packet on its way out */
+      if (!(send_buffer[0]&0x80)) { /* short header */
+	fprintf(cnx->quic->F_log,"DEBUG: len=%d byte=0x%2x qindex=%d gindex=%d S=%d Q=%d G=%d (loss=%d)\n",(int)*send_length,send_buffer[9],(int)cnx->loss_q_index,(int)cnx->loss_g_index,(send_buffer[0]&4)>>2,(send_buffer[0]&2)>>1,(send_buffer[0]&1),cnx->loss_count);
+	cnx->loss_g_index++;
+	cnx->loss_q_index++;
+	if (cnx->loss_q_index>=PICOQUIC_LOSS_Q_PERIOD) {
+	  cnx->loss_q_index=0;
+	  cnx->loss_q=(1-cnx->loss_q);
+	}
+      }
     }
 
     return ret;

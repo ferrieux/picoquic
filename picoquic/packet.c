@@ -1093,6 +1093,8 @@ int picoquic_incoming_encrypted(
                 cnx->spin_edge = 1;
 		if (cnx->spun) {
 		  cnx->loss_count = ((int64_t)ph->pn64 - (int64_t)cnx->loss_ref) - cnx->rcv_count;
+		  fprintf(cnx->quic->F_log,"SPINNING: S=%d   newpn=%ld  oldpn=%ld rcv=%d\n",cnx->current_spin,
+			  (int64_t)ph->pn64,(int64_t)cnx->loss_ref,cnx->rcv_count);
 		} else {
 		  cnx->loss_count=0;
 		}
