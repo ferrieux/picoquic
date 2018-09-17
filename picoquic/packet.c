@@ -1061,6 +1061,12 @@ int picoquic_incoming_0rtt(
     return ret;
 }
 
+/*
+  picoquic_trim_horizon : maintains the invariant that
+  cnx->loss_horizon is either 0 or the highest nonzero cell
+  in cnx->loss_cnt[]
+*/
+
 void picoquic_trim_horizon(picoquic_cnx_t* cnx)
 {
   int h;
@@ -1070,6 +1076,16 @@ void picoquic_trim_horizon(picoquic_cnx_t* cnx)
   }
   cnx->loss_horizon=h;
 }
+
+
+/*
+  shift_loss_cnt : pushes the history down one RTT slot.
+  Logs the unreported losses that get phased out (older
+  than PICOQUIC_LOSS_HORIZON), guarantees that negative
+  values (reordering candidates) don't outlive one RTT
+  (hence only cells 0 and 1 are ever allowed to get negative),
+  and trims the horizon.
+*/
 
 static void shift_loss_cnt(picoquic_cnx_t* cnx)
 {

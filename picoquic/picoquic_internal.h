@@ -58,8 +58,8 @@ extern "C" {
 #define PICOQUIC_CWIN_INITIAL (10 * PICOQUIC_MAX_PACKET_SIZE)
 #define PICOQUIC_CWIN_MINIMUM (2 * PICOQUIC_MAX_PACKET_SIZE)
 
-#define PICOQUIC_LOSS_Q_PERIOD	64
-#define PICOQUIC_LOSS_HORIZON	5
+#define PICOQUIC_LOSS_Q_PERIOD	64  /* fixed Kazuho sequence half-period */
+#define PICOQUIC_LOSS_HORIZON	5   /* max number of RTTs an unreported loss may survive */
   
 /*
  * Types of frames
@@ -446,6 +446,11 @@ typedef struct st_picoquic_cnx_t {
     unsigned int client_mode : 1; /* Is this connection the client side? */
     unsigned int prev_spin : 1;  /* previous Spin bit */
     unsigned int spin_edge : 1;  /* internal signalling from incoming to outgoing: we just spinned it */
+
+  /* Loss measurement state. The loss_cnt[] array holds the history of
+     unreported losses (positive) or reordering candidates (negative)
+     in the last few RTT slots. Invariants are kept to do the Right
+     Thing, ie expire losses and reords at different rates */
   
   unsigned int loss_q : 1;   /* current Q bit (square sequence)  */
   unsigned int loss_q_index; /* index into the square sequence   */

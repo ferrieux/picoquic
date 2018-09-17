@@ -217,6 +217,15 @@ uint32_t picoquic_predict_packet_header_length_11(
     return length;
 }
 
+/*
+  reap_and_report_loss : computes losses since last visit,
+  updates the current counter cnx->loss_cnt[0], and allows
+  for compensation of reordering within the pair of cells {0,1}.
+  The E bit of the outgoing packet will be set if, at that time,
+  a strictly positive counter is still present in  the history.
+  That counter is then decremented by 1.
+*/
+
 static int reap_and_report_loss(picoquic_cnx_t* cnx) {
   int delta,h;
   
@@ -2404,6 +2413,11 @@ int picoquic_prepare_packet(picoquic_cnx_t* cnx,
             }
         }
     }
+
+    /*
+      Q bit emission logic is here because at this point we're sure the packet will ship.
+      We do this directly on the (encrypted)wire image because we can -- Q being in the clear 1st octet ;)
+    */
 
     if ((ret==0)&&(*send_length != 0)) { /* actual packet on its way out */
       if (!(send_buffer[0]&0x80)) { /* short header */
