@@ -450,7 +450,8 @@ typedef struct st_picoquic_cnx_t {
   /* Loss measurement state. The loss_cnt[] array holds the history of
      unreported losses (positive) or reordering candidates (negative)
      in the last few RTT slots. Invariants are kept to do the Right
-     Thing, ie expire losses and reords at different rates */
+     Thing about expirations: reord life expectancy is 1 RTT, while
+     losses last longer (PICOQUIC_LOSS_HORIZON) */
   
   unsigned int loss_q : 1;   /* current Q bit (square sequence)  */
   unsigned int loss_q_index; /* index into the square sequence   */
