@@ -59,7 +59,6 @@ extern "C" {
 #define PICOQUIC_CWIN_MINIMUM (2 * PICOQUIC_MAX_PACKET_SIZE)
 
 #define PICOQUIC_LOSS_Q_PERIOD	64  /* fixed Kazuho sequence half-period */
-#define PICOQUIC_LOSS_HORIZON	5   /* max number of RTTs an unreported loss may survive */
   
 /*
  * Types of frames
@@ -447,19 +446,8 @@ typedef struct st_picoquic_cnx_t {
     unsigned int prev_spin : 1;  /* previous Spin bit */
     unsigned int spin_edge : 1;  /* internal signalling from incoming to outgoing: we just spinned it */
 
-  /* Loss measurement state. The loss_cnt[] array holds the history of
-     unreported losses (positive) or reordering candidates (negative)
-     in the last few RTT slots. Invariants are kept to do the Right
-     Thing about expirations: reord life expectancy is 1 RTT, while
-     losses last longer (PICOQUIC_LOSS_HORIZON) */
-  
   unsigned int loss_q : 1;   /* current Q bit (square sequence)  */
   unsigned int loss_q_index; /* index into the square sequence   */
-  unsigned int loss_horizon; /* losses in the last *HORIZON spin flights */
-           int loss_cnt[PICOQUIC_LOSS_HORIZON];   /* losses in the last *HORIZON spin flights */
-      uint64_t cur_pn;       /* latest incoming packet number*/
-      uint64_t loss_ref;     /* incoming packet number on previous outgoing*/
-  unsigned int rcv_count;    /* packet counter to compute losses */
   
     /* Local and remote parameters */
     picoquic_tp_t local_parameters;
@@ -619,7 +607,6 @@ size_t picoquic_headint_decode(const uint8_t* bytes, size_t max_bytes, uint64_t*
 /* utilities */
 char* picoquic_string_create(const char* original, size_t len);
 char* picoquic_string_duplicate(const char* original);
-void picoquic_trim_horizon(picoquic_cnx_t* cnx);
 
 /* Packet parsing */
 
@@ -658,7 +645,8 @@ uint32_t picoquic_create_packet_header(
     uint64_t sequence_number,
     uint8_t* bytes,
     uint32_t * pn_offset,
-    uint32_t * pn_length);
+    uint32_t * pn_length,
+    int contains_retrans);
 
 uint32_t  picoquic_predict_packet_header_length(
     picoquic_cnx_t* cnx,
@@ -695,7 +683,8 @@ uint32_t picoquic_protect_packet(picoquic_cnx_t* cnx,
     uint8_t * bytes, uint64_t sequence_number,
     uint32_t length, uint32_t header_length,
     uint8_t* send_buffer, uint32_t send_buffer_max,
-    void * aead_context, void* pn_enc);
+    void * aead_context, void* pn_enc,
+    int contains_retrans);
 
 void picoquic_finalize_and_protect_packet(picoquic_cnx_t *cnx, picoquic_packet_t * packet, int ret,
     uint32_t length, uint32_t header_length, uint32_t checksum_overhead,

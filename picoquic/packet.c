@@ -716,7 +716,7 @@ void picoquic_queue_stateless_retry(picoquic_cnx_t* cnx,
         cnx->remote_cnxid = ph->srce_cnx_id;
 
         byte_index = header_length = picoquic_create_packet_header(cnx, picoquic_packet_retry,
-            0, bytes, &pn_offset, &pn_length);
+	    0, bytes, &pn_offset, &pn_length, 0);
 
         
         /* use same encoding as packet header */
@@ -1062,51 +1062,6 @@ int picoquic_incoming_0rtt(
 }
 
 /*
-  picoquic_trim_horizon : maintains the invariant that
-  cnx->loss_horizon is either 0 or the highest nonzero cell
-  in cnx->loss_cnt[]
-*/
-
-void picoquic_trim_horizon(picoquic_cnx_t* cnx)
-{
-  int h;
-  
-  for(h=cnx->loss_horizon;h>0;h--) {
-    if (cnx->loss_cnt[h]>0) break;
-  }
-  cnx->loss_horizon=h;
-}
-
-
-/*
-  shift_loss_cnt : pushes the history down one RTT slot.
-  Logs the unreported losses that get phased out (older
-  than PICOQUIC_LOSS_HORIZON), guarantees that negative
-  values (reordering candidates) don't outlive one RTT
-  (hence only cells 0 and 1 are ever allowed to get negative),
-  and trims the horizon.
-*/
-
-static void shift_loss_cnt(picoquic_cnx_t* cnx)
-{
-  int h;
-  
-  cnx->loss_horizon++;
-  if (cnx->loss_horizon>=PICOQUIC_LOSS_HORIZON) {
-    cnx->loss_horizon--;
-    fprintf(cnx->quic->F_log,"LOSS_HORIZON=%d reached. Forgetting %d losses.\n",PICOQUIC_LOSS_HORIZON,cnx->loss_cnt[cnx->loss_horizon]);
-  }
-  for(h=cnx->loss_horizon;h>0;h--) {
-    cnx->loss_cnt[h]=cnx->loss_cnt[h-1];
-  }
-  if ((cnx->loss_horizon>=2)&&(cnx->loss_cnt[2]<0)) {
-    cnx->loss_cnt[2]=0; /* no reord-cancel beyond 1 RTT */
-  }
-  cnx->loss_cnt[0]=0;
-  picoquic_trim_horizon(cnx);
-}
-
-/*
  * Processing of client encrypted packet.
  */
 int picoquic_incoming_encrypted(
@@ -1136,12 +1091,8 @@ int picoquic_incoming_encrypted(
                 // got an edge 
                 cnx->prev_spin = cnx->current_spin;
                 cnx->spin_edge = 1;
-		fprintf(cnx->quic->F_log,"SPINNING: S=%d  lossdelta=%d\n",cnx->current_spin,cnx->loss_cnt[0]);
-		shift_loss_cnt(cnx);
             }
         }
-	cnx->rcv_count++;
-	cnx->cur_pn=ph->pn64;
 
         /* Do not process data in closing or draining modes */
         if (cnx->cnx_state >= picoquic_state_closing_received) {

@@ -217,63 +217,14 @@ uint32_t picoquic_predict_packet_header_length_11(
     return length;
 }
 
-/*
-  reap_and_report_loss : computes losses since last visit,
-  updates the current counter cnx->loss_cnt[0], and allows
-  for compensation of reordering within the pair of cells {0,1}.
-  The E bit of the outgoing packet will be set if, at that time,
-  a strictly positive counter is still present in  the history.
-  That counter is then decremented by 1.
-*/
-
-static int reap_and_report_loss(picoquic_cnx_t* cnx) {
-  int delta,h;
-  
-  if (cnx->loss_ref) {
-    delta = (cnx->cur_pn - cnx->loss_ref) - cnx->rcv_count;
-  } else {
-    /* first run */
-    delta=0;
-  }
-  
-  cnx->rcv_count = 0;
-  cnx->loss_ref = cnx->cur_pn;
-  h=0;
-  if (delta!=0) {
-    int c0,a0,s0,c1,a1,s1;
-    
-    h=cnx->loss_horizon;
-    if (h>1) h=1;
-    cnx->loss_cnt[0]+=delta;
-    /* compensation: if different signs, smallest abs value gets cancelled */
-    if ((h==1)&&(c0=cnx->loss_cnt[0])&&(c1=cnx->loss_cnt[1])) {
-      if (c0>=0) {a0=c0;s0=1;} else {a0=-c0;s0=0;}
-      if (c1>=0) {a1=c1;s1=1;} else {a1=-c1;s1=0;}
-      if (s0!=s1) {
-	if (a0>a1) {c0+=c1;c1=0;}
-	else {c1+=c0;c0=0;}
-	cnx->loss_cnt[0]=c0;
-	cnx->loss_cnt[1]=c1;
-      }
-    }
-  }
-  picoquic_trim_horizon(cnx);
-  if (cnx->loss_cnt[cnx->loss_horizon]>0) {
-    cnx->loss_cnt[cnx->loss_horizon]--;
-    picoquic_trim_horizon(cnx);
-    return 1;
-  } else {
-    return 0;
-  }
-}
-
 uint32_t picoquic_create_packet_header(
     picoquic_cnx_t* cnx,
     picoquic_packet_type_enum packet_type,
     uint64_t sequence_number,
     uint8_t* bytes,
     uint32_t * pn_offset,
-    uint32_t * pn_length)
+    uint32_t * pn_length,
+    int contains_retrans)
 {
     uint32_t length = 0;
     picoquic_connection_id_t dest_cnx_id =
@@ -290,7 +241,7 @@ uint32_t picoquic_create_packet_header(
         uint8_t spin_bit = (uint8_t)((cnx->current_spin) << 2);
         uint8_t loss_bits ;
 
-        loss_bits = (cnx->loss_q<<1)|reap_and_report_loss(cnx);
+        loss_bits = (cnx->loss_q<<1)|(contains_retrans!=0);
 
         length = 0;
         bytes[length++] = (K | C | spin_bit | loss_bits);
@@ -428,7 +379,7 @@ uint32_t picoquic_protect_packet(picoquic_cnx_t* cnx,
     uint64_t sequence_number,
     uint32_t length, uint32_t header_length,
     uint8_t* send_buffer, uint32_t send_buffer_max,
-    void * aead_context, void* pn_enc)
+    void * aead_context, void* pn_enc, int contains_retrans)
 {
     uint32_t send_length;
     uint32_t h_length;
@@ -440,7 +391,7 @@ uint32_t picoquic_protect_packet(picoquic_cnx_t* cnx,
 
     /* Create the packet header just before encrypting the content */
     h_length = picoquic_create_packet_header(cnx, ptype,
-        sequence_number, send_buffer, &pn_offset, &pn_length);
+	sequence_number, send_buffer, &pn_offset, &pn_length, contains_retrans);
     /* Make sure that the payload length is encoded in the header */
     /* Using encryption, the "payload" length also includes the encrypted packet length */
     picoquic_update_payload_length(send_buffer, pn_offset, h_length - pn_length, length + aead_checksum_length);
@@ -661,28 +612,28 @@ void picoquic_finalize_and_protect_packet(picoquic_cnx_t *cnx, picoquic_packet_t
         case picoquic_packet_initial:
             length = picoquic_protect_packet(cnx, packet->ptype, packet->bytes, packet->sequence_number,
                 length, header_length,
-                send_buffer, send_buffer_max, cnx->crypto_context[0].aead_encrypt, cnx->crypto_context[0].pn_enc);
+		send_buffer, send_buffer_max, cnx->crypto_context[0].aead_encrypt, cnx->crypto_context[0].pn_enc, packet->contains_retrans);
             break;
         case picoquic_packet_handshake:
             length = picoquic_protect_packet(cnx, packet->ptype, packet->bytes, packet->sequence_number,
                 length, header_length,
-                send_buffer, send_buffer_max, cnx->crypto_context[2].aead_encrypt, cnx->crypto_context[2].pn_enc);
+                send_buffer, send_buffer_max, cnx->crypto_context[2].aead_encrypt, cnx->crypto_context[2].pn_enc, packet->contains_retrans);
             break;
         case picoquic_packet_retry:
             length = picoquic_protect_packet(cnx, packet->ptype, packet->bytes, packet->sequence_number,
                 length, header_length,
-                send_buffer, send_buffer_max, cnx->crypto_context[0].aead_encrypt, cnx->crypto_context[0].pn_enc);
+                send_buffer, send_buffer_max, cnx->crypto_context[0].aead_encrypt, cnx->crypto_context[0].pn_enc, packet->contains_retrans);
             break;
         case picoquic_packet_0rtt_protected:
             length = picoquic_protect_packet(cnx, packet->ptype, packet->bytes, packet->sequence_number,
                 length, header_length,
-                send_buffer, send_buffer_max, cnx->crypto_context[1].aead_encrypt, cnx->crypto_context[1].pn_enc);
+                send_buffer, send_buffer_max, cnx->crypto_context[1].aead_encrypt, cnx->crypto_context[1].pn_enc, packet->contains_retrans);
             break;
         case picoquic_packet_1rtt_protected_phi0:
         case picoquic_packet_1rtt_protected_phi1:
             length = picoquic_protect_packet(cnx, packet->ptype, packet->bytes, packet->sequence_number,
                 length, header_length,
-                send_buffer, send_buffer_max, cnx->crypto_context[3].aead_encrypt, cnx->crypto_context[3].pn_enc);
+                send_buffer, send_buffer_max, cnx->crypto_context[3].aead_encrypt, cnx->crypto_context[3].pn_enc, packet->contains_retrans);
             break;
         default:
             /* Packet type error. Do nothing at all. */
@@ -2093,6 +2044,7 @@ int picoquic_prepare_packet_ready(picoquic_cnx_t* cnx, picoquic_path_t * path_x,
 
         if (ret == 0 && retransmit_possible &&
             (length = picoquic_retransmit_needed(cnx, pc, path_x, current_time, packet, send_buffer_min_max, &is_cleartext_mode, &header_length)) > 0) {
+	    packet->contains_retrans = 1;  
             /* Set the new checksum length */
             checksum_overhead = picoquic_get_checksum_length(cnx, is_cleartext_mode);
             /* Check whether it makes sense to add an ACK at the end of the retransmission */
