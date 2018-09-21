@@ -144,6 +144,30 @@ static char* strip_endofline(char* buf, size_t bufmax, char const* line)
     return buf;
 }
 
+static void picoquic_set_key_log_file_from_env(picoquic_quic_t* quic)
+{
+    const char* keylog_filename;
+    FILE* F = NULL;
+
+    keylog_filename = getenv("SSLKEYLOGFILE");
+    if (keylog_filename == NULL) {
+        return;
+    }
+#ifdef _WINDOWS
+    errno_t err = fopen_s(&F, keylog_filename, "a");
+    if (err != 0 || F == NULL) {
+        return;
+    }
+#else
+    F = fopen(keylog_filename, "a");
+    if (F == NULL) {
+        return;
+    }
+#endif
+
+    picoquic_set_key_log_file(quic, F);
+}
+
 #define PICOQUIC_FIRST_COMMAND_MAX 128
 #define PICOQUIC_FIRST_RESPONSE_MAX (1 << 20)
 
@@ -402,10 +426,12 @@ int quic_server(const char* server_name, int server_port,
                 picoquic_set_cookie_mode(qserver, 1);
             }
             qserver->mtu_max = mtu_max;
-        }
 
-        /* TODO: add log level, to reduce size in "normal" cases */
-        PICOQUIC_SET_LOG(qserver, stdout);
+            /* TODO: add log level, to reduce size in "normal" cases */
+            PICOQUIC_SET_LOG(qserver, stdout);
+
+            picoquic_set_key_log_file_from_env(qserver);
+        }
     }
 
     /* Wait for packets */
@@ -485,8 +511,14 @@ int quic_server(const char* server_name, int server_port,
                 }
 
                 while (ret == 0 && (cnx_next = picoquic_get_earliest_cnx_to_wake(qserver, loop_time)) != NULL) {
+                    int peer_addr_len = 0;
+                    struct sockaddr* peer_addr = NULL;
+                    int local_addr_len = 0;
+                    struct sockaddr* local_addr = NULL;
+
                     ret = picoquic_prepare_packet(cnx_next, current_time,
-                        send_buffer, sizeof(send_buffer), &send_length);
+                        send_buffer, sizeof(send_buffer), &send_length, 
+                        &peer_addr, &peer_addr_len, &local_addr, &local_addr_len);
 
                     if (ret == PICOQUIC_ERROR_DISCONNECTED) {
                         ret = 0;
@@ -507,10 +539,6 @@ int quic_server(const char* server_name, int server_port,
 
                         break;
                     } else if (ret == 0) {
-                        int peer_addr_len = 0;
-                        struct sockaddr* peer_addr;
-                        int local_addr_len = 0;
-                        struct sockaddr* local_addr;
 
                         if (send_length > 0) {
                             if (just_once != 0 ||
@@ -521,15 +549,10 @@ int quic_server(const char* server_name, int server_port,
                                     picoquic_get_cnx_state(cnx_next));
                             }
 
-                            picoquic_get_peer_addr(cnx_next, &peer_addr, &peer_addr_len);
-                            picoquic_get_local_addr(cnx_next, &local_addr, &local_addr_len);
-
                             (void)picoquic_send_through_server_sockets(&server_sockets,
                                 peer_addr, peer_addr_len, local_addr, local_addr_len,
                                 picoquic_get_local_if_index(cnx_next),
                                 (const char*)send_buffer, (int)send_length);
-
-                            /* TODO: log sending packet. */
                         }
                     } else {
                         break;
@@ -779,9 +802,67 @@ static void first_client_callback(picoquic_cnx_t* cnx,
 
 #define PICOQUIC_DEMO_CLIENT_MAX_RECEIVE_BATCH 4
 
+/* Client client migration to a new port number: 
+ *  - close the current socket.
+ *  - open another socket at a randomly picked port number.
+ *  - call the create probe API.
+ * This is a bit tricky because the probe API requires passing the new address,
+ * but in many cases the client will be behind a NAT, so it will not know its
+ * actual IP address.
+ */
+int quic_client_migrate(picoquic_cnx_t * cnx, SOCKET_TYPE * fd, struct sockaddr * server_address, FILE * F_log) 
+{
+    int ret = 0;
+    SOCKET_TYPE fd_m;
+
+    fd_m = socket(server_address->sa_family, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd_m == INVALID_SOCKET) {
+        fprintf(stdout, "Could not open new socket.\n");
+        if (F_log != stdout && F_log != stderr)
+        {
+            fprintf(stdout, "Could not open new socket.\n");
+        }
+        ret = -1;
+    } else {
+        SOCKET_CLOSE(*fd);
+        *fd = fd_m;
+
+        ret = picoquic_create_probe(cnx, server_address, NULL);
+        if (ret != 0) {
+
+            if (ret == PICOQUIC_ERROR_MIGRATION_DISABLED) {
+                fprintf(stdout, "Migration disabled, will test NAT rebinding support.\n");
+                if (F_log != stdout && F_log != stderr)
+                {
+                    fprintf(F_log, "Will test NAT rebinding support.\n");
+                }
+
+                ret = 0;
+            } else {
+                fprintf(stdout, "Create Probe failed, error: %x.\n", ret);
+                if (F_log != stdout && F_log != stderr)
+                {
+                    fprintf(F_log, "Create Probe failed, error: %x.\n", ret);
+                }
+            }
+        }
+        else {
+            fprintf(stdout, "Switch to new port, sending probe.\n");
+            if (F_log != stdout && F_log != stderr)
+            {
+                fprintf(F_log, "Switch to new port, sending probe.\n");
+            }
+            cnx->path[0]->path_is_demoted = 1;
+        }
+    }
+
+    return ret;
+}
+
+/* Quic Client */
 int quic_client(const char* ip_address_text, int server_port, const char * sni, 
     const char * root_crt,
-    uint32_t proposed_version, int force_zero_share, int mtu_max, FILE* F_log)
+    uint32_t proposed_version, int force_zero_share, int force_migration, int mtu_max, FILE* F_log)
 {
     /* Start: start the QUIC process with cert and key files */
     int ret = 0;
@@ -806,6 +887,7 @@ int quic_client(const char* ip_address_text, int server_port, const char * sni,
     int client_receive_loop = 0;
     int established = 0;
     int is_name = 0;
+    int migration_started = 0;
     int64_t delay_max = 10000000;
     int64_t delta_t = 0;
     int notified_ready = 0;
@@ -844,6 +926,8 @@ int quic_client(const char* ip_address_text, int server_port, const char * sni,
             qclient->mtu_max = mtu_max;
 
             PICOQUIC_SET_LOG(qclient, F_log);
+
+            picoquic_set_key_log_file_from_env(qclient);
 
             if (sni == NULL) {
                 /* Standard verifier would crash */
@@ -894,8 +978,9 @@ int quic_client(const char* ip_address_text, int server_port, const char * sni,
                     demo_client_start_streams(cnx_client, &callback_ctx, 0xFFFFFFFF);
                 }
 
+                /* TODO: once migration is supported, manage addresses */
                 ret = picoquic_prepare_packet(cnx_client, current_time,
-                    send_buffer, sizeof(send_buffer), &send_length);
+                    send_buffer, sizeof(send_buffer), &send_length, NULL, NULL, NULL, NULL);
 
                 if (ret == 0 && send_length > 0) {
                     bytes_sent = sendto(fd, send_buffer, (int)send_length, 0,
@@ -1005,6 +1090,18 @@ int quic_client(const char* ip_address_text, int server_port, const char * sni,
 
                     client_ready_loop++;
 
+                    if (force_migration && migration_started == 0 && cnx_client->cnxid_stash_first!= NULL) {
+                        int mig_ret = quic_client_migrate(cnx_client, &fd,
+                            (struct sockaddr *)&server_address, F_log);
+
+                        migration_started = 1;
+
+                        if (mig_ret != 0) {
+                            fprintf(stdout, "will not test migration.\n");
+                            migration_started = -1;
+                        }
+                    }
+
                     if ((bytes_recv == 0 || client_ready_loop > 4) && picoquic_is_cnx_backlog_empty(cnx_client)) {
                         if (callback_ctx.nb_open_streams == 0) {
                             if (cnx_client->nb_zero_rtt_sent != 0) {
@@ -1036,10 +1133,11 @@ int quic_client(const char* ip_address_text, int server_port, const char * sni,
                 }
 
                 if (ret == 0) {
+                    /* TODO: once migration is supported, manage addresses */
                     send_length = PICOQUIC_MAX_PACKET_SIZE;
 
                     ret = picoquic_prepare_packet(cnx_client, current_time,
-                        send_buffer, sizeof(send_buffer), &send_length);
+                        send_buffer, sizeof(send_buffer), &send_length, NULL, NULL, NULL, NULL);
 
                     if (ret == 0 && send_length > 0) {
                         bytes_sent = sendto(fd, send_buffer, (int)send_length, 0,
@@ -1130,6 +1228,7 @@ void usage()
     fprintf(stderr, "                            1: picoquic_cnx_id_remote (client)\n");
     fprintf(stderr, "  -v version            Version proposed by client, e.g. -v ff00000a\n");
     fprintf(stderr, "  -z                    Set TLS zero share behavior on client, to force HRR.\n");
+    fprintf(stderr, "  -f                    Force client to migrate to new port after opening connection\n");
     fprintf(stderr, "  -l file               Log file\n");
     fprintf(stderr, "  -m mtu_max            Largest mtu value that can be tried for discovery\n");
     fprintf(stderr, "  -h                    This help message\n");
@@ -1176,6 +1275,7 @@ int main(int argc, char** argv)
     int just_once = 0;
     int do_hrr = 0;
     int force_zero_share = 0;
+    int force_migration = 0;
     int cnx_id_mask_is_set = 0;
     cnx_id_callback_ctx_t cnx_id_cbdata = {
         .cnx_id_select = 0,
@@ -1195,7 +1295,7 @@ int main(int argc, char** argv)
 
     /* Get the parameters */
     int opt;
-    while ((opt = getopt(argc, argv, "c:k:p:v:1rhzi:s:l:m:n:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:k:p:v:1rhzfi:s:l:m:n:t:")) != -1) {
         switch (opt) {
         case 'c':
             server_cert_file = optarg;
@@ -1210,10 +1310,6 @@ int main(int argc, char** argv)
             }
             break;
         case 'v':
-            if (optind + 1 > argc) {
-                fprintf(stderr, "option requires more arguments -- s\n");
-                usage();
-            }
             if ((proposed_version = parse_target_version(optarg)) <= 0) {
                 fprintf(stderr, "Invalid version: %s\n", optarg);
                 usage();
@@ -1231,26 +1327,22 @@ int main(int argc, char** argv)
                 usage();
             }
             reset_seed = reset_seed_x; /* replacing the original alloca, which is not supported in Windows or BSD */
-            reset_seed[1] = strtoul(argv[optind], NULL, 0);
+            reset_seed[1] = strtoul(optarg, NULL, 0);
             reset_seed[0] = strtoul(argv[optind++], NULL, 0);
             break;
         case 'i':
-            if (optind + 2 > argc) {
+            if (optind + 1 > argc) {
                 fprintf(stderr, "option requires more arguments -- i\n");
                 usage();
             }
 
             cnx_id_cbdata.cnx_id_select = atoi(optarg);
             /* TODO: find an alternative to parsing a 64 bit integer */
-            picoquic_set64_connection_id(&cnx_id_cbdata.cnx_id_mask, ~strtoul(argv[optind++], NULL, 0));
+            picoquic_set64_connection_id(&cnx_id_cbdata.cnx_id_mask, ~strtoul(optarg, NULL, 0));
             picoquic_set64_connection_id(&cnx_id_cbdata.cnx_id_val, strtoul(argv[optind++], NULL, 0));
             cnx_id_mask_is_set = 1;
             break;
         case 'l':
-            if (optind + 1 > argc) {
-                fprintf(stderr, "option requires more arguments -- s\n");
-                usage();
-            }
             log_file = optarg;
             break;
         case 'm':
@@ -1268,6 +1360,9 @@ int main(int argc, char** argv)
             break;
         case 'z':
             force_zero_share = 1;
+            break;
+        case 'f':
+            force_migration = 1;
             break;
         case 'h':
             usage();
@@ -1335,7 +1430,8 @@ int main(int argc, char** argv)
 
         /* Run as client */
         printf("Starting PicoQUIC connection to server IP = %s, port = %d\n", server_name, server_port);
-        ret = quic_client(server_name, server_port, sni, root_trust_file, proposed_version, force_zero_share, mtu_max, F_log);
+        ret = quic_client(server_name, server_port, sni, root_trust_file, proposed_version, force_zero_share, 
+            force_migration, mtu_max, F_log);
 
         printf("Client exit with code = %d\n", ret);
 

@@ -30,6 +30,11 @@ namespace UnitTest1
 	TEST_CLASS(UnitTest1)
 	{
 	public:
+        TEST_CLASS_INITIALIZE(setup) {
+            // avoid large debug spew that slows down the console.
+            debug_printf_suspend();
+        }
+
 	    TEST_METHOD(test_picohash)
 	    {
             int ret = picohash_test();
@@ -180,6 +185,20 @@ namespace UnitTest1
         TEST_METHOD(test_pn_enc_1rtt)
         {
             int ret = pn_enc_1rtt_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(test_cnxid_stash)
+        {
+            int ret = cnxid_stash_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(test_new_cnxid)
+        {
+            int ret = new_cnxid_test();
 
             Assert::AreEqual(ret, 0);
         }
@@ -369,13 +388,6 @@ namespace UnitTest1
         TEST_METHOD(test_multiple_versions)
         {
             int ret = tls_api_multiple_versions_test();
-
-            Assert::AreEqual(ret, 0);
-        }
-
-        TEST_METHOD(test_ping_pong)
-        {
-            int ret = ping_pong_test();
 
             Assert::AreEqual(ret, 0);
         }
@@ -601,6 +613,27 @@ namespace UnitTest1
         TEST_METHOD(zero_rtt_retry)
         {
             int ret = zero_rtt_retry_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(test_transmit_cnxid)
+        {
+            int ret = transmit_cnxid_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(test_probe_api)
+        {
+            int ret = probe_api_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(test_migration)
+        {
+            int ret = migration_test();
 
             Assert::AreEqual(ret, 0);
         }
