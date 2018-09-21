@@ -1244,14 +1244,6 @@ int picoquic_incoming_encrypted(
     }
     else {
         /* Packet is correct */
-        if (ph->pn64 > cnx->pkt_ctx[pc].first_sack_item.end_of_sack_range) {
-            cnx->current_spin = ph->spin ^ cnx->client_mode;
-            if (ph->has_spin_bit && cnx->current_spin != cnx->prev_spin) {
-                // got an edge 
-                cnx->prev_spin = cnx->current_spin;
-                cnx->spin_edge = 1;
-            }
-        }
 
         /* TODO: consider treatment of migration during closing mode */
 
