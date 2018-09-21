@@ -403,10 +403,6 @@ typedef struct st_picoquic_path_t {
     unsigned int path_is_demoted : 1;
     unsigned int current_spin : 1; /* Current value of the spin bit */             
     unsigned int client_mode : 1; /* Is this connection the client side? */
-    unsigned int prev_spin : 1;  /* previous Spin bit */
-    unsigned int spin_vec : 2;   /* Valid Edge Counter, makes spin bit RTT measurements more reliable */
-    unsigned int spin_edge : 1;  /* internal signalling from incoming to outgoing: we just spinned it */
-    uint64_t spin_last_trigger;  /* timestamp of the incoming packet that triggered the spinning */
 
     /* Time measurement */
     uint64_t max_ack_delay;

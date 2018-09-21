@@ -1294,13 +1294,6 @@ int picoquic_incoming_encrypted(
                 if (ph->pn64 > cnx->pkt_ctx[pc].first_sack_item.end_of_sack_range) {
                     path_x->current_spin = ph->spin ^ cnx->client_mode;
                     /* TODO: spin bit should be per path */
-                    if (ph->has_spin_bit && path_x->current_spin != path_x->prev_spin) {
-                        // got an edge 
-                        path_x->prev_spin = path_x->current_spin;
-                        path_x->spin_edge = 1;
-                        path_x->spin_vec = (ph->spin_vec == 3) ? 3 : (ph->spin_vec + 1);
-                        path_x->spin_last_trigger = picoquic_get_quic_time(cnx->quic);
-                    }
                 }
                 /* Accept the incoming frames */
                 ret = picoquic_decode_frames(cnx, cnx->path[path_id], 
