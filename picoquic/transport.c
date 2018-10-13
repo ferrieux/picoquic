@@ -540,7 +540,6 @@ int picoquic_receive_transport_extensions(picoquic_cnx_t* cnx, int extension_mod
                             } else {
                                 cnx->remote_parameters.initial_max_data = PICOPARSE_32(bytes + byte_index);
                                 cnx->maxdata_remote = cnx->remote_parameters.initial_max_data;
-                                cnx->max_stream_id_bidir_remote = cnx->local_parameters.initial_max_stream_id_bidir;
                             }
                             break;
                         case picoquic_tp_initial_max_bidi_streams:
@@ -698,7 +697,8 @@ int picoquic_receive_transport_extensions(picoquic_cnx_t* cnx, int extension_mod
     if (ret == 0 && extension_mode == 1 &&
         picoquic_supported_versions[cnx->version_index].version != PICOQUIC_SEVENTH_INTEROP_VERSION &&
         picoquic_supported_versions[cnx->version_index].version != PICOQUIC_EIGHT_INTEROP_VERSION) {
-        if (picoquic_compare_connection_id(&cnx->original_cnxid, &original_connection_id) != 0) {
+        if (cnx->original_cnxid.id_len != 0 &&
+            picoquic_compare_connection_id(&cnx->original_cnxid, &original_connection_id) != 0) {
             ret = picoquic_connection_error(cnx, PICOQUIC_TRANSPORT_PARAMETER_ERROR, 0);
         }
     }
